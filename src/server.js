@@ -6,6 +6,7 @@ import { rateLimit } from 'express-rate-limit';
 import { config } from './config.js';
 import { logger } from './utils/logger.js';
 import { router as apiRouter } from './api/router.js';
+import { initWebSocketGateway } from './gateway/websocket.js';
 
 const app = express();
 
@@ -48,8 +49,10 @@ app.use((err, req, res, next) => {
 });
 
 // 6. Start Server
-const server = app.listen(config.port, () => {
+const httpServer = app.listen(config.port, () => {
   logger.info(`Hannah Backend listening on port ${config.port} [ENV: ${config.env}]`);
 });
 
-export default server;
+initWebSocketGateway(httpServer);
+
+export default httpServer;
