@@ -6,6 +6,7 @@
 
 ## Table of Contents
 
+0. [Quick Start](#0-quick-start)
 1. [Project Overview](#1-project-overview)
 2. [System Architecture](#2-system-architecture)
 3. [Repository Structure](#3-repository-structure)
@@ -27,6 +28,27 @@
 11. [Roadmap & Phases](#11-roadmap--phases)
 12. [Development Rules for Agents](#12-development-rules-for-agents)
 13. [Repository Setup Instructions](#13-repository-setup-instructions)
+
+---
+
+## 0. Quick Start
+
+If you have cloned this repository, follow these steps to get the backend running:
+
+1.  **Install Dependencies**:
+    ```bash
+    npm install
+    ```
+2.  **Configure Environment**:
+    ```bash
+    cp .env.example .env
+    ```
+    Edit `.env` and fill in your **OpenAI API Key** (for ASR) and **Groq API Key** (for LLM).
+3.  **Start Development Server**:
+    ```bash
+    npm run dev
+    ```
+    The server will be live at `http://localhost:3001`.
 
 ---
 
