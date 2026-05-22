@@ -1,6 +1,7 @@
 {
   "name": "hannah-backend",
   "version": "1.0.0",
+  "type": "module",
   "description": "",
   "main": "index.js",
   "scripts": {
@@ -14,7 +15,6 @@
   "keywords": [],
   "author": "",
   "license": "ISC",
-  "type": "commonjs",
   "dependencies": {
     "@anthropic-ai/sdk": "^0.98.0",
     "axios": "^1.16.1",
