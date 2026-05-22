@@ -127,7 +127,7 @@ hannah-backend/
 │   │   ├── asr.js                 # ASR module (Whisper cloud or local)
 │   │   ├── llm.js                 # LLM module (Claude / GPT-4)
 │   │   ├── tts.js                 # TTS module (ElevenLabs / Coqui)
-│   │   └── lipsync.js             # Viseme extraction from TTS audio/text
+│   │   └── lipsync.js             # Viseme extraction (Phonetic heuristic mapping)
 │   │
 │   ├── state/
 │   │   └── conversationManager.js # Multi-turn context, session store
@@ -135,33 +135,21 @@ hannah-backend/
 │   ├── api/
 │   │   ├── router.js              # Express router — mounts all routes
 │   │   ├── health.js              # GET /health
-│   │   ├── sessions.js            # POST /session, DELETE /session/:id
-│   │   └── config.js              # GET /config (safe public config)
+│   │   └── sessions.js            # POST /session, DELETE /session/:id
 │   │
-│   ├── privacy/
-│   │   └── sanitizer.js           # Strips PII, enforces no-store rules
+│   ├── privacy/                   # (Planned) Sanitizer and privacy filters
 │   │
 │   └── utils/
-│       ├── logger.js              # Structured logging (no raw audio logged)
-│       ├── timer.js               # Latency measurement per pipeline stage
-│       └── sidecar.js             # Spawns/communicates with Python sidecar
+│       ├── logger.js              # Structured logging
+│       └── timer.js               # Latency measurement per pipeline stage
 │
-├── sidecar/                       # Python ML sidecar (separate process)
-│   ├── main.py                    # FastAPI app — exposes /asr and /tts
-│   ├── asr_handler.py             # faster-whisper integration
-│   ├── tts_handler.py             # Coqui TTS integration
-│   └── requirements.txt
+├── sidecar/                       # (Planned) Python ML sidecar (currently empty)
 │
 ├── tests/
 │   ├── unit/
-│   │   ├── asr.test.js
-│   │   ├── llm.test.js
-│   │   └── tts.test.js
 │   └── integration/
-│       └── pipeline.test.js
 │
 ├── scripts/
-│   └── test-pipeline.js           # Manual end-to-end test with a WAV file
 │
 ├── .env.example                   # Template for all required env vars
 ├── .env                           # Local secrets — NEVER commit this
@@ -189,8 +177,8 @@ hannah-backend/
 | Module | Primary (Cloud)                             | Fallback (Local/Sidecar)          | Why                                                        |
 | ------ | ------------------------------------------- | --------------------------------- | ---------------------------------------------------------- |
 | ASR    | OpenAI Whisper API                          | faster-whisper via Python sidecar | Whisper best multilingual accuracy; local for offline/cost |
-| LLM    | Anthropic Claude (claude-sonnet-4-20250514) | OpenAI GPT-4o                     | Claude preferred; GPT-4o fallback                          |
-| TTS    | ElevenLabs API (multilingual v2)            | Coqui TTS via Python sidecar      | ElevenLabs best quality; Coqui for offline                 |
+| LLM    | Groq (LLaMA 3.1 8B)                         | —                                 | Ultra-low latency inference; essential for <500ms target   |
+| TTS    | Kokoro TTS                                  | Coqui TTS via Python sidecar      | Kokoro best speed/quality balance; Coqui for offline       |
 
 ### Supporting Libraries
 
@@ -278,8 +266,7 @@ numpy==1.26.4
 
 **Responsibility:** Receive transcript text + conversation history → return response text + optional emotion tag.
 
-**Primary:** Anthropic Claude (`claude-sonnet-4-20250514`)
-**Fallback:** OpenAI GPT-4o
+**Primary:** Groq (`llama-3.1-8b-instant`) via OpenAI-compatible SDK.
 
 **System prompt:** Loaded from `src/config.js` (configurable via env). Default:
 
@@ -318,13 +305,11 @@ At the end of each response, append an emotion tag on a new line in the format:
 
 **Responsibility:** Convert response text → synthesized speech audio buffer.
 
-**Primary:** ElevenLabs API
+**Primary:** Kokoro TTS
 
-- Endpoint: `https://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream`
-- Model: `eleven_multilingual_v2`
-- Voice ID: configurable via `ELEVENLABS_VOICE_ID` env var
-- Output format: `mp3_44100_128`
-- Streaming: YES — uses ElevenLabs streaming endpoint, pipes chunks directly to client
+- Output format: `wav` (typically)
+- Voice ID: configurable via `ELEVENLABS_VOICE_ID` (legacy env var name)
+- Streaming: YES — pipes chunks directly to client
 
 **Fallback:** Python sidecar at `http://localhost:8001/tts`
 
@@ -336,10 +321,10 @@ At the end of each response, append an emotion tag on a new line in the format:
 ```js
 {
   audioBuffer: Buffer,        // raw audio bytes (mp3 or wav)
-  format: "mp3",              // or "wav"
+  format: "wav",              // or "mp3"
   duration_ms: 1200,          // estimated audio duration
-  sample_rate: 44100,
-  tts_latency_ms: 290         // time to first byte
+  sample_rate: 24000,         // Kokoro typical sample rate
+  tts_latency_ms: 150         // time to first byte
 }
 ```
 
@@ -400,45 +385,44 @@ This array is sent to the frontend alongside the audio buffer so the avatar can 
 **Connection flow:**
 
 1. Client connects to `ws://host/ws?sessionId=<uuid>`
-2. Server validates session, creates or retrieves conversation state
-3. Client streams audio chunks as binary WebSocket frames
-4. Server streams response back as a series of JSON messages (see message types below)
+2. Server validates session via `ConversationManager`.
+3. Client streams raw audio chunks as binary WebSocket frames.
+4. Server emits JSON messages back to the client.
 
 **Incoming message types (client → server):**
 
-| Type         | Payload           | Description                  |
-| ------------ | ----------------- | ---------------------------- |
-| `binary`     | raw audio bytes   | Audio chunk from microphone  |
-| `text_input` | `{ text: "..." }` | Optional keyboard text input |
-| `ping`       | —                 | Keepalive                    |
-| `reset`      | —                 | Clear conversation history   |
+| Type         | Payload           | Description                                      |
+| ------------ | ----------------- | ------------------------------------------------ |
+| `binary`     | raw audio bytes   | Audio chunk from microphone (PCM/WAV)            |
+| `JSON`       | `{ command: "SPEECH_START" }` | Resets buffers for a new utterance. |
+| `JSON`       | `{ command: "SPEECH_END" }`   | Triggers the pipeline processing.   |
 
 **Outgoing message types (server → client):**
 
 ```js
-// Transcript acknowledgment (sent as soon as ASR completes)
-{ type: "transcript", text: "Hola, ¿cómo estás?" }
+// Transcript acknowledgment (ASR result)
+{ type: "user_transcript", text: "Hola, ¿cómo estás?" }
 
-// LLM response token (streamed, one per token)
-{ type: "token", text: "Muy " }
+// Audio Segment (Sent per sentence as they are generated)
+{ 
+  type: "audio_chunk", 
+  text: "Hola, soy Hannah.", 
+  visemes: [ { time_ms, viseme, weight }, ... ],
+  audioBase64: "..." // Base64 encoded MP3/WAV chunk
+}
 
-// Emotion detected
-{ type: "emotion", value: "happy" }
-
-// Viseme data (sent before or alongside audio)
-{ type: "visemes", data: [ { time_ms, viseme, weight }, ... ] }
-
-// Audio chunk (binary frame, NOT JSON — sent as Buffer)
-// (preceded by a JSON header message)
-{ type: "audio_start", format: "mp3", sample_rate: 44100 }
-// ... binary frames ...
-{ type: "audio_end" }
+// Turn completion
+{ 
+  type: "turn_complete", 
+  emotion: "happy", 
+  metrics: { llm_ms: 450 } 
+}
 
 // Error
-{ type: "error", code: "asr_failed", message: "..." }
+{ type: "error", message: "Error interno de procesamiento" }
 ```
 
-**Concurrency:** Each WebSocket connection is independent. Use one pipeline instance per connection. Do NOT share state between connections.
+**Concurrency:** Each WebSocket connection is independent. Sessions are tied to the `sessionId` query parameter.
 
 ---
 
@@ -451,12 +435,9 @@ This array is sent to the frontend alongside the audio buffer so the avatar can 
 | Method   | Path           | Description                                                        |
 | -------- | -------------- | ------------------------------------------------------------------ |
 | `GET`    | `/health`      | Server health + dependency status                                  |
-| `POST`   | `/session`     | Create new session, returns `sessionId`                            |
-| `DELETE` | `/session/:id` | End session, clear state                                           |
-| `GET`    | `/config`      | Returns safe public config (voices, models available)              |
-| `POST`   | `/text`        | HTTP fallback — send text, get full audio response (non-streaming) |
-
-The `/text` endpoint is for testing and non-WebSocket clients. All real-time interaction goes through WebSocket.
+| `POST`   | `/session`     | Create new session, returns `sessionId` and TTL                    |
+| `DELETE` | `/session/:id` | End session, purge from memory                                     |
+| `POST`   | `/text`        | HTTP fallback — send text, get full response envelope (validation) |
 
 ---
 
@@ -464,45 +445,23 @@ The `/text` endpoint is for testing and non-WebSocket clients. All real-time int
 
 **File:** `src/state/conversationManager.js`
 
-**Responsibility:** Maintain per-session conversation history for multi-turn LLM context.
-
-**Session object:**
-
-```js
-{
-  sessionId: "uuid-v4",
-  createdAt: Date,
-  lastActivityAt: Date,
-  turns: [
-    { role: "user",      content: "Hola" },
-    { role: "assistant", content: "¡Hola! ¿En qué puedo ayudarte?" }
-  ],
-  emotion: "neutral",         // last detected avatar emotion
-  language: "es"              // detected user language
-}
-```
+**Responsibility:** Maintain per-session conversation history and metadata.
 
 **Rules:**
-
-- Sessions expire after `SESSION_TTL_MINUTES` (default: 30) of inactivity
-- Maximum `CONTEXT_TURNS` kept (default: 10 — older turns are dropped)
-- Storage: in-memory Map (sufficient for MVP). No DB needed initially.
-- On session delete, ALL data is removed from memory immediately (privacy rule)
+- Sessions expire after `SESSION_TTL_MINUTES`.
+- Automatic garbage collection runs every 5 minutes.
+- Strictly maintains `CONTEXT_TURNS` window (default 10).
+- Data is kept in RAM using a `Map`.
 
 ---
 
 ### 5.8 Privacy & Security Layer
 
-**File:** `src/privacy/sanitizer.js`
-
-**Rules (mandatory — never bypass these):**
-
-1. **No raw audio stored.** Audio buffers exist only in memory during a pipeline turn. They are never written to disk or logged.
-2. **No video processed server-side.** All face tracking (MediaPipe) runs in the browser. The backend never receives video frames.
-3. **Transcripts are ephemeral.** Transcripts exist only within the session's in-memory turn history. Not persisted.
-4. **Logs contain no PII.** Logger must strip any user content from log lines. Log structure/timing only.
-5. **TLS required in production.** All WebSocket and HTTP traffic must be over WSS/HTTPS in any non-local environment.
-6. **GDPR/CCPA notice.** The `/session` creation endpoint must document that callers must have obtained user consent before starting a session.
+**Rules (mandatory):**
+1. **No raw audio stored.** Audio is processed in memory and buffers are cleared immediately after `SPEECH_END` processing.
+2. **No video processed server-side.**
+3. **Logs contain no PII.** Transcripts and responses are never logged.
+4. **GDPR/CCPA Compliance.** API consumers must obtain consent before creating a session.
 
 ---
 
@@ -511,24 +470,20 @@ The `/text` endpoint is for testing and non-WebSocket clients. All real-time int
 Complete end-to-end flow for one conversational turn:
 
 ```
-[1] Client captures 1–3 seconds of audio via WebAudio API
-[2] Audio is sent as binary WebSocket frames to the server
-[3] Server buffers chunks → detects end of utterance (silence / client signal)
-[4] ASR module sends buffer to Whisper → receives transcript text
-[5] Server emits { type: "transcript", text } to client
-[6] LLM module sends transcript + conversation history to Claude
-[7] Claude streams tokens → server emits { type: "token" } per token
-[8] Emotion tag is parsed from LLM output → { type: "emotion" } emitted
-[9] Accumulated LLM text sent to TTS module
-[10] TTS streams audio chunks back from ElevenLabs
-[11] Lipsync module generates viseme array from text + audio duration
-[12] Server emits { type: "visemes", data } to client
-[13] Server emits { type: "audio_start" } then streams binary audio frames
-[14] Client plays audio + drives avatar blendshapes using viseme timeline
-[15] { type: "audio_end" } signals turn complete
+[1] Client sends { command: "SPEECH_START" }
+[2] Client streams binary audio chunks via WebSocket
+[3] Client sends { command: "SPEECH_END" }
+[4] Server ASR (Whisper) transcribes full buffer
+[5] Server emits { type: "user_transcript", text }
+[6] Server LLM (Groq) generates response text (buffered per sentence)
+[7] For each sentence:
+    a. TTS (Kokoro) synthesizes audio chunk
+    b. LipSync generates viseme timeline
+    c. Server emits { type: "audio_chunk", text, visemes, audioBase64 }
+[8] Server emits { type: "turn_complete", emotion }
 ```
 
-Target total latency (step 1 to step 13): **< 500ms** (see Section 7).
+Target total latency (step 3 to first step 7c): **< 500ms**.
 
 ---
 
@@ -540,10 +495,10 @@ Based on the MascotBot benchmark (7-stage pipeline achieving ~340ms P50):
 | ------------------------------------ | ----------- | ---------------------- |
 | Audio capture + send                 | ~50ms       | Client-side            |
 | ASR (Whisper API)                    | ~150ms      | Cloud; local is slower |
-| LLM (Claude, time to first token)    | ~200ms      | Streaming helps        |
-| TTS (ElevenLabs, time to first byte) | ~100ms      | Streaming endpoint     |
+| LLM (Groq, time to first token)      | ~100ms      | Streaming helps        |
+| TTS (Kokoro, time to first byte)     | ~100ms      | Streaming endpoint     |
 | Viseme generation                    | <10ms       | Text-based method      |
-| **Total end-to-end (P50 target)**    | **< 500ms** |                        |
+| **Total end-to-end (P50 target)**    | **< 400ms** |                        |
 
 **Mandatory:** measure and log latency for every stage, every turn, using `src/utils/timer.js`. Alert (log warning) if any stage exceeds its budget by 2×.
 
@@ -559,32 +514,31 @@ PORT=3001
 NODE_ENV=development
 LOG_LEVEL=info
 
-# ASR
-ASR_PROVIDER=cloud               # "cloud" (OpenAI) or "local" (sidecar)
+# ASR (Whisper)
+ASR_PROVIDER=cloud
 OPENAI_API_KEY=sk-...
 WHISPER_MODEL=whisper-1
 
-# LLM
-LLM_PROVIDER=anthropic           # "anthropic" or "openai"
-ANTHROPIC_API_KEY=sk-ant-...
-OPENAI_API_KEY=sk-...            # also used as LLM fallback
-LLM_MODEL=claude-sonnet-4-20250514
+# LLM (Groq)
+LLM_PROVIDER=openai-compatible
+LLM_API_KEY=gsk_...
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_MODEL=llama-3.1-8b-instant
 CONTEXT_TURNS=10
 
-# TTS
-TTS_PROVIDER=elevenlabs          # "elevenlabs" or "local" (sidecar)
-ELEVENLABS_API_KEY=...
-ELEVENLABS_VOICE_ID=...          # get from ElevenLabs dashboard
+# TTS (Kokoro)
+TTS_PROVIDER=kokoro
+ELEVENLABS_VOICE_ID=af_bella # Kokoro uses this variable for voice ID
 
-# Sidecar (Python)
+# Sidecar
 SIDECAR_URL=http://localhost:8001
-SIDECAR_ENABLED=false            # set true to use local ASR/TTS
+SIDECAR_ENABLED=false
 
 # Session
 SESSION_TTL_MINUTES=30
 
 # Security
-CORS_ORIGIN=http://localhost:5173   # frontend dev URL
+CORS_ORIGIN=http://localhost:5173
 ```
 
 ---
@@ -603,8 +557,8 @@ Query params: `?sessionId=<uuid>` (get from `POST /api/v1/session` first)
   "version": "0.1.0",
   "services": {
     "asr": "cloud",
-    "llm": "anthropic",
-    "tts": "elevenlabs",
+    "llm": "groq",
+    "tts": "kokoro",
     "sidecar": "disabled"
   },
   "uptime_s": 3421
@@ -690,7 +644,7 @@ Response:
 | Phase                     | Dates        | Backend Goal                                                                                |
 | ------------------------- | ------------ | ------------------------------------------------------------------------------------------- |
 | **1 — Research & Design** | Jun–Aug 2026 | Finalize this architecture, set up repo, validate all API keys work                         |
-| **2 — Prototypes**        | Sep–Dec 2026 | Working pipeline: Whisper → Claude → ElevenLabs, WS gateway live, latency baseline measured |
+| **2 — Prototypes**        | Sep–Dec 2026 | Working pipeline: Whisper → Groq → Kokoro, WS gateway live, latency baseline measured        |
 | **3 — Unity Integration** | Jan–Mar 2027 | Backend stable; provide viseme + emotion data consumed by Unity frontend                    |
 | **4 — Iteration**         | Apr–Jun 2027 | Optimize streaming, reduce latency, add sidecar for offline mode                            |
 | **5 — MVP Launch**        | Jul–Aug 2027 | Deploy to production, monitor metrics, gather user feedback                                 |
@@ -707,7 +661,7 @@ Response:
 4. **One pipeline per WebSocket connection.** Do not share pipeline state between users/sessions.
 5. **Measure latency for every stage.** Use `src/utils/timer.js`. Add timing to every module's output contract.
 6. **English-language code, Spanish-language avatar.** Variable names, comments, and docs are in English. The LLM system prompt and avatar persona are in Spanish.
-7. **LLM model string is always `claude-sonnet-4-20250514`.** Do not hardcode other model strings.
+7. **LLM model string is always `llama-3.1-8b-instant`.** Do not hardcode other model strings.
 8. **Fail gracefully.** If ASR fails, tell the client with `{ type: "error", code: "asr_failed" }` and do not proceed to LLM. Never let an unhandled exception crash the server.
 9. **Environment variables for all secrets and configuration.** No hardcoded API keys, URLs, or model names outside of `src/config.js`.
 10. **All new routes must be registered in `src/api/router.js`.** Never add routes directly in `server.js`.
@@ -742,7 +696,7 @@ npm init -y
 
 ```bash
 # Production dependencies
-npm install express ws dotenv @anthropic-ai/sdk openai axios uuid winston cors helmet express-rate-limit
+npm install express ws dotenv openai axios uuid winston cors helmet express-rate-limit
 
 # Dev dependencies
 npm install --save-dev jest nodemon supertest
@@ -781,18 +735,21 @@ PORT=3001
 NODE_ENV=development
 LOG_LEVEL=info
 
+# 1. Speech to Text (Whisper)
 ASR_PROVIDER=cloud
 OPENAI_API_KEY=sk-...
 WHISPER_MODEL=whisper-1
 
-LLM_PROVIDER=anthropic
-ANTHROPIC_API_KEY=sk-ant-...
-LLM_MODEL=claude-sonnet-4-20250514
+# 2. Dialogue Brain (Groq LLaMA 3)
+LLM_PROVIDER=openai-compatible
+LLM_API_KEY=gsk_...
+LLM_BASE_URL=https://api.groq.com/openai/v1
+LLM_MODEL=llama-3.1-8b-instant
 CONTEXT_TURNS=10
 
-TTS_PROVIDER=elevenlabs
-ELEVENLABS_API_KEY=...
-ELEVENLABS_VOICE_ID=...
+# 3. Audio Output (Kokoro)
+TTS_PROVIDER=kokoro
+ELEVENLABS_VOICE_ID=af_bella
 
 SIDECAR_URL=http://localhost:8001
 SIDECAR_ENABLED=false
@@ -835,16 +792,16 @@ cd ..
 ### Step 8 — Validate the setup
 
 ```bash
-# Start the dev server (it will fail until you build server.js, but confirms Node works)
+# Start the dev server
 npm run dev
 
-# In another terminal, test your API keys:
+# In another terminal, test your API keys (Groq):
 node -e "
-const Anthropic = require('@anthropic-ai/sdk');
-const client = new Anthropic({ apiKey: process.env.ANTHROPIC_API_KEY });
-client.messages.create({ model: 'claude-sonnet-4-20250514', max_tokens: 10, messages: [{ role: 'user', content: 'Hi' }] })
-  .then(r => console.log('Claude OK:', r.content[0].text))
-  .catch(e => console.error('Claude FAIL:', e.message));
+const OpenAI = require('openai');
+const client = new OpenAI({ apiKey: process.env.LLM_API_KEY, baseURL: process.env.LLM_BASE_URL });
+client.chat.completions.create({ model: 'llama-3.1-8b-instant', max_tokens: 10, messages: [{ role: 'user', content: 'Hi' }] })
+  .then(r => console.log('Groq OK:', r.choices[0].message.content))
+  .catch(e => console.error('Groq FAIL:', e.message));
 "
 ```
 

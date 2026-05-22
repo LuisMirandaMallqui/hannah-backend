@@ -20,8 +20,9 @@ export const config = {
     model: process.env.WHISPER_MODEL || 'whisper-1',
   },
   llm: {
-    provider: process.env.LLM_PROVIDER || 'anthropic',
-    model: 'claude-sonnet-4-20250514', // Enforced by architectural spec
+    provider: process.env.LLM_PROVIDER || 'anthropic', // "anthropic" or "openai-compatible"
+    model: process.env.LLM_MODEL || 'claude-sonnet-4-20250514',
+    baseUrl: process.env.LLM_BASE_URL || null, // Null defaults to official OpenAI servers
     contextTurns: parseInt(process.env.CONTEXT_TURNS || '10', 10),
     systemPrompt: `You are Hannah, a helpful and expressive AI avatar. 
 Respond conversationally and concisely (1–3 sentences). 
