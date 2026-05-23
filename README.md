@@ -95,7 +95,7 @@ If you have cloned this repository, follow these steps to get the backend runnin
 │  ┌─────────────┐   ┌──────────────┐   ┌──────────────────┐  │
 │  │  WebSocket  │   │  REST API    │   │  State Manager   │  │
 │  │  Gateway    │   │  (Express)   │   │  (conversation   │  │
-│  │             │   │              │   │   context/turns) │  │
+│  │  (Port 3001)│   │              │   │   context/turns) │  │
 │  └──────┬──────┘   └──────────────┘   └──────────────────┘  │
 │         │                                                      │
 │         ▼                                                      │
@@ -105,19 +105,19 @@ If you have cloned this repository, follow these steps to get the backend runnin
 │  │  [1] ASR Module → [2] LLM Module → [3] TTS Module        │ │
 │  │        ↓                                  ↓               │ │
 │  │  transcript text              audio buffer + visemes       │ │
-│  └─────────────────────────────────────────────────────────┘ │
-│         │                                                      │
-│         ▼                                                      │
-│  ┌─────────────┐                                              │
-│  │  Python     │  (sidecar via child_process or HTTP)         │
-│  │  Sidecar    │  runs: faster-whisper, Coqui TTS             │
-│  └─────────────┘                                              │
+│  └──────┬────────────────────────────────────┬─────────────┘ │
+│         │                                    │                 │
+│         ▼                                    ▼                 │
+│  ┌──────────────┐                  ┌───────────────────┐      │
+│  │ YOLO Vision  │                  │ Kokoro Audio      │      │
+│  │ (Port 8001)  │                  │ (Port 8002)       │      │
+│  └──────────────┘                  └───────────────────┘      │
 └─────────────────────────────────────────────────────────────┘
                           │  External HTTPS calls
           ┌───────────────┼────────────────────┐
           ▼               ▼                    ▼
-   OpenAI Whisper   Claude / GPT-4       ElevenLabs TTS
-   (cloud fallback) (Anthropic API)      (cloud TTS)
+   OpenAI Whisper   Groq LLaMA 3.1       ElevenLabs TTS
+   (ASR Cloud)      (LLM Cloud)          (Fallback Cloud)
 ```
 
 ### Streaming Strategy
@@ -200,7 +200,8 @@ hannah-backend/
 | ------ | ------------------------------------------- | --------------------------------- | ---------------------------------------------------------- |
 | ASR    | OpenAI Whisper API                          | faster-whisper via Python sidecar | Whisper best multilingual accuracy; local for offline/cost |
 | LLM    | Groq (LLaMA 3.1 8B)                         | —                                 | Ultra-low latency inference; essential for <500ms target   |
-| TTS    | Kokoro TTS                                  | Coqui TTS via Python sidecar      | Kokoro best speed/quality balance; Coqui for offline       |
+| TTS    | Kokoro TTS (Port 8002)                      | ElevenLabs (Cloud Fallback)       | Kokoro best speed/quality balance; local execution         |
+| Vision | YOLO v8 (Port 8001)                         | —                                 | Real-time scene analysis and object detection              |
 
 ### Supporting Libraries
 
@@ -550,17 +551,17 @@ CONTEXT_TURNS=10
 
 # TTS (Kokoro)
 TTS_PROVIDER=kokoro
+TTS_SIDECAR_URL=http://127.0.0.1:8002
 ELEVENLABS_VOICE_ID=af_bella # Kokoro uses this variable for voice ID
 
-# Sidecar
-SIDECAR_URL=http://localhost:8001
-SIDECAR_ENABLED=false
+# Vision (YOLO)
+VISION_SIDECAR_URL=http://127.0.0.1:8001
 
 # Session
 SESSION_TTL_MINUTES=30
 
 # Security
-CORS_ORIGIN=http://localhost:5173
+CORS_ORIGIN=http://localhost:5174
 ```
 
 ---
