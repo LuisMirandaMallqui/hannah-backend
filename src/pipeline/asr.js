@@ -6,7 +6,7 @@ import { logger } from '../utils/logger.js';
 
 // Initialize OpenAI client using environment fallback safely
 const openai = new OpenAI({
-    apiKey: process.env.OPENAI_API_KEY,
+    apiKey: config.asr.apiKey || process.env.OPENAI_API_KEY,
 });
 
 /**

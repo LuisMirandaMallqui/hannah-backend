@@ -37,9 +37,8 @@ export const synthesizeSpeechStream = async (text) => {
  */
 const runKokoroLocalStream = async (text) => {
     const timer = startTimer();
-    // Buscamos la URL del sidecar (http://localhost:8001) y la voz elegida (af_bella)
-    const sidecarUrl = process.env.SIDECAR_URL || 'http://localhost:8001';
-    const voice = process.env.ELEVENLABS_VOICE_ID || 'af_bella';
+    const sidecarUrl = config.tts.sidecarUrl;
+    const voice = config.tts.voiceId || 'af_bella';
 
     try {
         const response = await axios({
@@ -50,7 +49,7 @@ const runKokoroLocalStream = async (text) => {
                 voice: voice,
                 speed: 1.0
             },
-            responseType: 'stream', // Recibe el flujo de audio binario en tiempo real
+            responseType: 'stream',
         });
 
         return {

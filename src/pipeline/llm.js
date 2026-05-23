@@ -1,18 +1,12 @@
 // src/pipeline/llm.js
-import Anthropic from '@anthropic-ai/sdk';
 import { OpenAI } from 'openai';
 import { config } from '../config.js';
 import { startTimer } from '../utils/timer.js';
 import { logger } from '../utils/logger.js';
 
-// Initialize Anthropic Client
-const anthropic = new Anthropic({
-    apiKey: process.env.ANTHROPIC_API_KEY,
-});
-
 // Initialize Generic OpenAI-Compatible Client (Groq, Ollama, OpenRouter, or OpenAI)
 const genericOpenAI = new OpenAI({
-    apiKey: process.env.LLM_API_KEY || process.env.OPENAI_API_KEY, // Falls back to OpenAI if no custom LLM key is given
+    apiKey: config.llm.apiKey,
     baseURL: config.llm.baseUrl || undefined,
 });
 
@@ -20,53 +14,11 @@ const genericOpenAI = new OpenAI({
  * Agnostic Streaming Wrapper for Dialogue Engines
  */
 export const generateDialogueStream = async (history, onToken, onComplete) => {
-    const provider = config.llm.provider.toLowerCase();
-
-    if (provider === 'anthropic') {
-        return runAnthropicStream(history, onToken, onComplete);
-    } else {
-        return runOpenAICompatibleStream(history, onToken, onComplete);
-    }
+    return runOpenAICompatibleStream(history, onToken, onComplete);
 };
 
 /**
- * Path A: Anthropic Claude Stream Connection
- */
-const runAnthropicStream = async (history, onToken, onComplete) => {
-    const timer = startTimer();
-    let accumulatedResponse = '';
-
-    try {
-        const formattedMessages = history.map(turn => ({
-            role: turn.role === 'assistant' ? 'assistant' : 'user',
-            content: turn.content
-        }));
-
-        const stream = await anthropic.messages.create({
-            model: 'claude-sonnet-4-20250514', // Architecturally locked for Claude paths
-            max_tokens: 150,
-            system: config.llm.systemPrompt,
-            messages: formattedMessages,
-            stream: true,
-        });
-
-        for await (const event of stream) {
-            if (event.type === 'content_block_delta' && event.delta?.text) {
-                const token = event.delta.text;
-                accumulatedResponse += token;
-                if (onToken) onToken(token);
-            }
-        }
-
-        finalizeLlmTurn(accumulatedResponse, timer.stop(), onComplete);
-    } catch (error) {
-        logger.error('Anthropic stream engine runtime error', { message: error.message });
-        if (onComplete) onComplete({ error: 'llm_failed', message: error.message });
-    }
-};
-
-/**
- * Path B: Generic OpenAI-Compatible Stream Connection (LLaMA, Groq, local Ollama)
+ * Path: Generic OpenAI-Compatible Stream Connection (LLaMA, Groq, local Ollama)
  */
 const runOpenAICompatibleStream = async (history, onToken, onComplete) => {
     const timer = startTimer();

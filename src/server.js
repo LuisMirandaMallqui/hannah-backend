@@ -11,9 +11,11 @@ import { initWebSocketGateway } from './gateway/websocket.js';
 const app = express();
 
 // 1. Security Middleware
-app.use(helmet());
+app.use(helmet({
+  contentSecurityPolicy: false, // Deshabilitar CSP para pruebas locales con scripts externos
+}));
 app.use(cors({
-  origin: config.corsOrigin,
+  origin: '*', // PERMITIR TODO TEMPORALMENTE PARA PRUEBAS
   methods: ['GET', 'POST', 'DELETE'],
   allowedHeaders: ['Content-Type', 'Authorization']
 }));
