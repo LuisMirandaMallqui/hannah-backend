@@ -1,53 +1,81 @@
 // src/pipeline/asr.js
-import { OpenAI, toFile } from 'openai';
+import axios from 'axios';
+import FormData from 'form-data';
 import { config } from '../config.js';
 import { startTimer } from '../utils/timer.js';
 import { logger } from '../utils/logger.js';
 
-// Initialize OpenAI client using environment fallback safely
-const openai = new OpenAI({
-    apiKey: config.asr.apiKey || process.env.OPENAI_API_KEY,
-});
-
 /**
- * Converts a raw audio buffer into text using OpenAI Whisper
- * @param {Buffer} audioBuffer - In-memory raw audio data chunk
- * @param {string} [mimeType='audio/wav'] - Format format identifier
- * @returns {Promise<Object>} Output contract containing transcript and timing metrics
+ * Transcribe audio buffer using faster-whisper sidecar (local) or OpenAI Whisper (cloud)
  */
 export const transcribeAudio = async (audioBuffer, mimeType = 'audio/wav') => {
     const timer = startTimer();
 
-    try {
-        if (!audioBuffer || audioBuffer.length === 0) {
-            throw new Error('Received an empty or invalid audio buffer');
-        }
+    if (!audioBuffer || audioBuffer.length === 0) {
+        return { error: 'asr_failed', message: 'Empty audio buffer' };
+    }
 
-        // Convert in-memory buffer to an explicit file-like object without touch disk storage
-        const file = await toFile(audioBuffer, 'input_utterance.wav', { type: mimeType });
+    if (config.asr.provider === 'local') {
+        return transcribeLocal(audioBuffer, mimeType, timer);
+    }
+
+    return transcribeCloud(audioBuffer, mimeType, timer);
+};
+
+/**
+ * Local path: faster-whisper via Python sidecar (port 8001)
+ */
+const transcribeLocal = async (audioBuffer, mimeType, timer) => {
+    try {
+        const form = new FormData();
+        form.append('file', audioBuffer, {
+            filename: 'utterance.wav',
+            contentType: mimeType,
+        });
+        form.append('model', config.asr.model || 'small');
+        form.append('language', 'es');
+
+        const response = await axios.post(
+            `${process.env.SIDECAR_URL || 'http://localhost:8001'}/asr`,
+            form,
+            { headers: form.getHeaders(), timeout: 10000 }
+        );
+
+        const durationMs = timer.stop();
+        if (durationMs > 300) logger.warn('ASR local exceeded latency budget', { durationMs });
+
+        return {
+            transcript: response.data.transcript || '',
+            language: response.data.language || 'es',
+            confidence: response.data.confidence || 1.0,
+            duration_ms: durationMs,
+        };
+    } catch (error) {
+        logger.error('ASR local sidecar failed', { message: error.message });
+        return { error: 'asr_failed', message: error.message };
+    }
+};
+
+/**
+ * Cloud path: OpenAI Whisper API (fallback, requires OPENAI_API_KEY)
+ */
+const transcribeCloud = async (audioBuffer, mimeType, timer) => {
+    try {
+        const { OpenAI, toFile } = await import('openai');
+        const openai = new OpenAI({ apiKey: config.asr.apiKey });
+        const file = await toFile(audioBuffer, 'utterance.wav', { type: mimeType });
 
         const response = await openai.audio.transcriptions.create({
-            file: file,
-            model: config.asr.model,
-            language: 'es', // Primary language constraint optimization
-            temperature: 0.0, // Low temperature forces high accuracy/low hallucination
+            file,
+            model: 'whisper-1',
+            language: 'es',
+            temperature: 0.0,
         });
 
         const durationMs = timer.stop();
-
-        // Budget check alert
-        if (durationMs > 300) {
-            logger.warn('ASR exceeded standard latency budget target', { durationMs });
-        }
-
-        return {
-            transcript: response.text || '',
-            language: 'es',
-            confidence: 1.0,
-            duration_ms: durationMs
-        };
+        return { transcript: response.text || '', language: 'es', confidence: 1.0, duration_ms: durationMs };
     } catch (error) {
-        logger.error('ASR Module failure occurred', { message: error.message });
+        logger.error('ASR cloud failed', { message: error.message });
         return { error: 'asr_failed', message: error.message };
     }
 };

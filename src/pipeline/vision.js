@@ -5,17 +5,19 @@ import { config } from '../config.js';
 const VISION_URL = config.vision.sidecarUrl;
 
 export const visionPipeline = {
-    /**
-     * Conecta con el sidecar de Python para obtener la simulación del escenario de video
-     * @param {string} scenario
-     */
-    analyzeScene: async (scenario) => {
+    analyzeScene: async (imageBase64) => {
         try {
-            const response = await axios.post(`${VISION_URL}/analyze-scene`, { scenario });
-            return response.data; // Retorna: { success: true, detections: [...], summary: "..." }
+            const response = await axios.post(`${VISION_URL}/analyze-scene`, {
+                image_base64: imageBase64
+            });
+            return response.data;
         } catch (error) {
             console.error('❌ Error en src/pipeline/vision.js:', error.message);
             throw error;
         }
     }
 };
+
+export async function analyzeFrame(imageBase64) {
+    return visionPipeline.analyzeScene(imageBase64);
+}

@@ -5,12 +5,14 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-  "start": "node src/server.js",
-  "dev": "nodemon src/server.js",
-  "test": "jest",
-  "test:watch": "jest --watch",
-  "test:coverage": "jest --coverage",
-  "sidecar": "cd sidecar && uvicorn main:app --port 8001 --reload"
+    "start": "node src/server.js",
+    "dev": "nodemon src/server.js",
+    "test": "jest",
+    "test:watch": "jest --watch",
+    "test:coverage": "jest --coverage",
+    "sidecar:asr": "cd sidecar/asr && ../../sidecar/.venv/bin/uvicorn main:app --port 8001 --reload",
+    "sidecar:tts": "cd sidecar/tts && ../../sidecar/.venv/bin/uvicorn main:app --port 8002 --reload",
+    "sidecar:vision": "cd sidecar/vision && ../../sidecar/.venv/bin/uvicorn main:app --port 8003 --reload"
   },
   "keywords": [],
   "author": "",
@@ -22,11 +24,12 @@
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
     "express-rate-limit": "^8.5.2",
-    "helmet": "^8.1.0",
+    "form-data": "^4.0.5",
+    "helmet": "^8.2.0",
     "openai": "^6.39.0",
     "uuid": "^14.0.0",
     "winston": "^3.19.0",
-    "ws": "^8.20.1"
+    "ws": "^8.21.0"
   },
   "devDependencies": {
     "jest": "^30.4.2",

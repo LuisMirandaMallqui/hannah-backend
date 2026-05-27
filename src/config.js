@@ -2,7 +2,7 @@
 import dotenv from 'dotenv';
 dotenv.config();
 
-const requiredEnv = ['OPENAI_API_KEY', 'LLM_API_KEY'];
+const requiredEnv = ['LLM_API_KEY'];
 if (process.env.NODE_ENV === 'production') {
   requiredEnv.forEach((envVar) => {
     if (!process.env[envVar]) {

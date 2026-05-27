@@ -37,7 +37,7 @@ const runOpenAICompatibleStream = async (history, onToken, onComplete) => {
         const stream = await genericOpenAI.chat.completions.create({
             model: config.llm.model, // Pulls whatever string you defined in .env (e.g., LLaMA)
             messages: formattedMessages,
-            max_tokens: 150,
+            max_tokens: 400,
             stream: true,
         });
 
