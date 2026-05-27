@@ -1,9 +1,21 @@
+# Node
 node_modules/
-.env
-*.log
 dist/
 coverage/
-sidecar/__pycache__/
-sidecar/.venv/
+*.log
+
+# Variables de entorno
+.env
+
+# Python (Caché global)
+**/__pycache__/
+*.pyc
+
+# Modelos y pesos pesados (Binarios IA)
+*.onnx
+*.bin
+*.pt
+
+# Audios temporales
 *.wav
 *.mp3

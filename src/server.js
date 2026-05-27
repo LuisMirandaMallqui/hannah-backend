@@ -33,6 +33,9 @@ app.use('/api/', limiter);
 // 3. Body Parsing Middleware
 app.use(express.json());
 
+// Servir cliente de prueba
+app.use(express.static('.'));
+
 // 4. API Routes
 app.use('/api/v1', apiRouter);
 
