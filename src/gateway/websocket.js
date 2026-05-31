@@ -11,11 +11,22 @@ import { processTextTurn } from '../pipeline/orchestrator.js';
 export const initWebSocketGateway = (httpServer) => {
     const wss = new WebSocketServer({ noServer: true });
 
-    httpServer.on('upgrade', (request, socket, head) => {
+    httpServer.on('upgrade', async (request, socket, head) => {
         const url = new URL(request.url, `http://${request.headers.host}`);
         const sessionId = url.searchParams.get('sessionId');
+        const token     = url.searchParams.get('token');
 
-        if (!sessionId || !conversationManager.getSession(sessionId)) {
+        // Validar JWT
+        const { verifyTokenWs } = await import('../middleware/auth.js');
+        const tokenData = verifyTokenWs(token);
+        if (!tokenData) {
+            socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
+            socket.destroy();
+            return;
+        }
+
+        const session = await conversationManager.getSession(sessionId);
+        if (!sessionId || !session) {
             socket.write('HTTP/1.1 401 Unauthorized\r\n\r\n');
             socket.destroy();
             return;

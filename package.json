@@ -29,7 +29,9 @@
     "openai": "^6.39.0",
     "uuid": "^14.0.0",
     "winston": "^3.19.0",
-    "ws": "^8.21.0"
+    "ws": "^8.21.0",
+    "ioredis": "^5.3.2",
+    "jsonwebtoken": "^9.0.2"
   },
   "devDependencies": {
     "jest": "^30.4.2",

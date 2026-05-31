@@ -40,7 +40,7 @@ const processAndSendSegment = async (text, sendCallback) => {
 export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment) => {
     try {
         // 1. Validar la sesión
-        const session = conversationManager.getSession(sessionId);
+        const session = await conversationManager.getSession(sessionId);
         if (!session) throw new Error('La sesión no existe o ha expirado');
 
         // 2. ASR: Transcribir el audio del usuario
@@ -51,13 +51,13 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment) 
         }
 
         // Guardar lo que dijo el usuario en la memoria in-memory de la sesión
-        conversationManager.addTurn(sessionId, 'user', asrResult.transcript);
+        await conversationManager.addTurn(sessionId, 'user', asrResult.transcript);
 
         // Avisarle al cliente qué fue lo que entendimos
         onStreamSegment({ type: 'user_transcript', text: asrResult.transcript });
 
         // 3. LLM: Ejecutar el flujo del modelo pasándole el historial de turnos actual
-        const updatedSession = conversationManager.getSession(sessionId);
+        const updatedSession = await conversationManager.getSession(sessionId);
         await executeLlmPipeline(sessionId, updatedSession.turns, onStreamSegment);
 
     } catch (error) {
@@ -76,7 +76,7 @@ export const processVoiceTurn = async (sessionId, audioBuffer, onStreamSegment) 
 export const processTextTurn = async (sessionId, systemPromptAlert, onStreamSegment) => {
     try {
         // 1. Validar la sesión
-        const session = conversationManager.getSession(sessionId);
+        const session = await conversationManager.getSession(sessionId);
         if (!session) throw new Error('La sesión no existe o ha expirado');
 
         logger.info('⚙️ Procesando inyección visual en el pipeline de texto...', { sessionId });
@@ -117,7 +117,7 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment) => {
             }
         },
         // Callback al finalizar el flujo por completo
-        (finalLlmResult) => {
+        async (finalLlmResult) => {
             if (finalLlmResult.error) return;
 
             if (sentenceBuffer.trim().length > 0) {
@@ -125,8 +125,8 @@ const executeLlmPipeline = async (sessionId, turnsInput, onStreamSegment) => {
             }
 
             // Guardar la respuesta final real en el historial oficial de la base de datos de la sesión
-            conversationManager.addTurn(sessionId, 'assistant', finalLlmResult.text);
-            conversationManager.updateSessionMetadata(sessionId, { emotion: finalLlmResult.emotion });
+            await conversationManager.addTurn(sessionId, 'assistant', finalLlmResult.text);
+            await conversationManager.updateSessionMetadata(sessionId, { emotion: finalLlmResult.emotion });
 
             // Cerrar ciclo de transmisión en el frontend
             onStreamSegment({

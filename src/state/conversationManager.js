@@ -1,124 +1,70 @@
 // src/state/conversationManager.js
+// ConversationManager respaldado por Redis para soporte multi-sesión.
+// Todos los métodos son async porque Redis es I/O-bound.
 import { v4 as uuidv4 } from 'uuid';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const Redis = require('ioredis');
 import { config } from '../config.js';
 import { logger } from '../utils/logger.js';
 
 class ConversationManager {
   constructor() {
-    this.sessions = new Map();
-    // Run a periodic garbage collector every 5 minutes to clear stale sessions
-    this.cleanupInterval = setInterval(() => this.cleanupExpiredSessions(), 5 * 60 * 1000);
+    this.redis = new Redis(config.redis.url);
+    this.ttl = config.session.ttl * 60; // segundos
   }
 
-  /**
-   * Creates a brand new interactive session
-   */
-  createSession() {
+  _key(sessionId) {
+    return `session:${sessionId}:state`;
+  }
+
+  async createSession() {
     const sessionId = uuidv4();
-    const sessionData = {
+    const data = {
       sessionId,
-      createdAt: new Date(),
-      lastActivityAt: new Date(),
+      createdAt: new Date().toISOString(),
       turns: [],
       emotion: 'neutral',
-      language: 'es' // Default language avatar speaks
+      language: 'es',
     };
-
-    // Inject system prompt as the hidden first context turn if required by your pipeline flow
-    // For Claude, system messages are often passed separately, but we track turns here
-    this.sessions.set(sessionId, sessionData);
-    
-    logger.info('New session created', { sessionId });
-    return {
-      sessionId,
-      expiresIn: config.session.ttl * 60
-    };
+    await this.redis.set(this._key(sessionId), JSON.stringify(data), 'EX', this.ttl);
+    logger.info('Session created', { sessionId });
+    return { sessionId, expiresIn: this.ttl };
   }
 
-  /**
-   * Retrieves an active session or null if expired/non-existent
-   */
-  getSession(sessionId) {
-    const session = this.sessions.get(sessionId);
-    if (!session) return null;
-
-    // Check if session has expired dynamically
-    const ageInMinutes = (new Date() - session.lastActivityAt) / 1000 / 60;
-    if (ageInMinutes > config.session.ttl) {
-      this.deleteSession(sessionId);
-      return null;
-    }
-
-    // Refresh activity timestamp on access
-    session.lastActivityAt = new Date();
-    return session;
+  async getSession(sessionId) {
+    const raw = await this.redis.get(this._key(sessionId));
+    if (!raw) return null;
+    // Renovar TTL en cada acceso
+    await this.redis.expire(this._key(sessionId), this.ttl);
+    return JSON.parse(raw);
   }
 
-  /**
-   * Appends a new turn (user utterance or assistant response) 
-   * and strictly maintains the CONTEXT_TURNS window limit.
-   */
-  addTurn(sessionId, role, content) {
-    const session = this.getSession(sessionId);
+  async addTurn(sessionId, role, content) {
+    const session = await this.getSession(sessionId);
     if (!session) return false;
-
     session.turns.push({ role, content });
-
-    // Evict older turns if we cross our architectural budget constraint
     if (session.turns.length > config.llm.contextTurns) {
-      session.turns.shift(); // Drops oldest turn
+      session.turns.shift();
     }
-
-    session.lastActivityAt = new Date();
+    await this.redis.set(this._key(sessionId), JSON.stringify(session), 'EX', this.ttl);
     return true;
   }
 
-  /**
-   * Updates the ongoing structural metadata of the conversation
-   */
-  updateSessionMetadata(sessionId, updates = {}) {
-    const session = this.getSession(sessionId);
+  async updateSessionMetadata(sessionId, updates = {}) {
+    const session = await this.getSession(sessionId);
     if (!session) return false;
-
     if (updates.emotion) session.emotion = updates.emotion;
     if (updates.language) session.language = updates.language;
-    
-    session.lastActivityAt = new Date();
+    await this.redis.set(this._key(sessionId), JSON.stringify(session), 'EX', this.ttl);
     return true;
   }
 
-  /**
-   * Purges a session immediately from RAM (Privacy Directive Compliance)
-   */
-  deleteSession(sessionId) {
-    if (this.sessions.has(sessionId)) {
-      this.sessions.delete(sessionId);
-      logger.info('Session purged successfully from memory', { sessionId });
-      return true;
-    }
-    return false;
-  }
-
-  /**
-   * Sweeps the Map to delete old sessions automatically
-   */
-  cleanupExpiredSessions() {
-    const now = new Date();
-    let purgeCount = 0;
-
-    for (const [sessionId, session] of this.sessions.entries()) {
-      const ageInMinutes = (now - session.lastActivityAt) / 1000 / 60;
-      if (ageInMinutes > config.session.ttl) {
-        this.sessions.delete(sessionId);
-        purgeCount++;
-      }
-    }
-
-    if (purgeCount > 0) {
-      logger.info('Stale sessions cleared by state garbage collector', { count: purgeCount });
-    }
+  async deleteSession(sessionId) {
+    const deleted = await this.redis.del(this._key(sessionId));
+    if (deleted) logger.info('Session deleted', { sessionId });
+    return deleted > 0;
   }
 }
 
-// Export as a single application-wide instance
 export const conversationManager = new ConversationManager();
